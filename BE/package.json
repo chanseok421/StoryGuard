@@ -21,6 +21,8 @@
     "eval:compare": "node --import tsx --env-file-if-exists=.env src/rag/compare-embeddings.live.ts",
     "demo:evidence": "node --import tsx --env-file-if-exists=.env src/rag/embeddingRetrieveEvidence.live.ts",
     "spike:pipeline": "node --import tsx --env-file-if-exists=.env src/rag/pipeline-spike.live.ts",
+    "smoke:deepagent": "dotenv -e C:\\Secrets\\storyguard.env -- tsx src/graph/deepagent-smoke.live.ts",
+    "smoke:deepagent:mac": "dotenv -e ~/Secrets/storyguard.env -- tsx src/graph/deepagent-smoke.live.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
