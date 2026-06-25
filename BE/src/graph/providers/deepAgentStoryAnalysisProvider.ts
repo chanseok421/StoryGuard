@@ -1,4 +1,4 @@
-import { createDeepAgent } from "deepagents";
+import { createDeepAgent, type SubAgent } from "deepagents";
 import { toolStrategy } from "langchain";
 import { ChatOpenAI } from "@langchain/openai";
 import { tool } from "@langchain/core/tools";
@@ -14,16 +14,19 @@ import type { StoryAnalysisProvider } from "./types.js";
 const DEFAULT_GROQ_API_BASE_URL = "https://api.groq.com/openai/v1";
 const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
 const DEFAULT_OPENAI_API_BASE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
-const DEFAULT_TIMEOUT_MS = 90_000;
-const DEFAULT_RECURSION_LIMIT = 50;
+// 멀티에이전트 오케스트레이션은 약한 모델에서 환각/도구호출 오류가 잦다. 검증 결과
+// gpt-4o-mini 는 부적합, gpt-4o 는 충돌 3종 정확 검출. 그래서 단일 프롬프트 경로의
+// OPENAI_ANALYSIS_MODEL(보통 mini)을 상속하지 않고 별도 기본값을 둔다.
+const DEFAULT_OPENAI_MODEL = "gpt-4o";
+const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_RECURSION_LIMIT = 80;
 
 /**
- * 1단계(배선) 구현. 기존 단일 프롬프트 provider와 동일한 StoryAnalysisProvider 인터페이스를
- * 따르되, 내부적으로 LangGraph 기반 deep agent를 돌린다. 에이전트는 RAG 검색을 "도구"로
- * 호출하며(search_settings), 최종 출력은 기존 validator로 정합성을 보장한다.
- *
- * 아직 유형별 서브에이전트/write_todos는 붙이지 않았다(다음 단계).
+ * 기존 단일 프롬프트 provider와 동일한 StoryAnalysisProvider 인터페이스를 따르되, 내부는
+ * LangGraph 기반 deep agent다. 메인 에이전트(오케스트레이터)가 write_todos로 계획하고,
+ * 충돌 유형별 서브에이전트(world-rule/timeline/character/foreshadow)에 task 도구로 위임하며,
+ * 각 에이전트는 RAG 검색을 도구(search_settings)로 직접 호출한다. 최종 출력은 기존
+ * validateGraphAnalysisResult 로 정합성을 보장하고, 실패 시 호출부에서 rule-based로 폴백한다.
  */
 
 const issueSchema = z.object({
@@ -66,23 +69,89 @@ const analysisResponseSchema = z.object({
   edges: z.array(edgeSchema),
 });
 
-const SYSTEM_PROMPT = [
-  "너는 한국어 소설의 '설정 붕괴(continuity error)'를 검출하는 분석 에이전트다.",
-  "원고(manuscript)와 세계관 설정(settings)을 비교해 충돌을 찾아낸다.",
-  "",
-  "작업 방식:",
-  "1. 원고를 읽고 인물·규칙·사건·장소·복선 단위로 검증 포인트를 잡는다.",
-  "2. 각 포인트마다 search_settings 도구를 호출해 관련 설정 근거를 직접 검색한다.",
-  "   (원고에 등장하는 모든 단정적 서술은 설정과 대조해 확인할 것)",
-  "3. 원고가 설정을 위반하거나, 복선을 회수하지 않는 부분을 issue로 정리한다.",
-  "4. 충돌에 관련된 인물/규칙/사건/장소/복선/이슈를 node로, 그 관계를 edge로 만든다.",
-  "",
+const OUTPUT_RULES = [
   "출력 규칙:",
-  "- issue.type 은 character_conflict | world_rule_conflict | timeline_conflict | causality_conflict | foreshadowing_gap 중 하나.",
   "- node.type 은 character | event | rule | place | foreshadow | issue 중 하나.",
+  "- 충돌마다 issue 노드 1개를 만들고, 관련 인물/규칙/사건/장소/복선 노드도 만든다.",
   "- issue.relatedNodeIds 는 네가 만든 node.id 들만 참조한다(이슈 자신의 id 포함 가능).",
   "- edge.source/target 은 반드시 존재하는 node.id 여야 한다.",
-  "- 충돌이 없으면 issues 는 빈 배열로 둔다.",
+  "- manuscriptQuote 는 원고에서 실제로 인용하고, conflictingSetting 은 설정 근거를 인용한다.",
+  "- 충돌이 없으면 issues/nodes/edges 를 모두 빈 배열로 둔다.",
+].join("\n");
+
+type ConflictAgentConfig = {
+  name: string;
+  issueType: (typeof issueSchema.shape.type.options)[number];
+  focus: string;
+  /** node/issue id 접두사. 서브에이전트 간 id 충돌을 막는다. */
+  idPrefix: string;
+};
+
+const CONFLICT_AGENTS: ConflictAgentConfig[] = [
+  {
+    name: "world-rule-checker",
+    issueType: "world_rule_conflict",
+    focus: "세계관 규칙(마법·능력·금기·물리법칙 등)을 원고가 위반하는지",
+    idPrefix: "wr",
+  },
+  {
+    name: "timeline-checker",
+    issueType: "timeline_conflict",
+    focus: "사건의 발생 순서·시점, 인물의 등장/이동 시점이 설정과 모순되는지",
+    idPrefix: "tl",
+  },
+  {
+    name: "character-checker",
+    issueType: "character_conflict",
+    focus: "인물의 성격·능력·관계·외형·소지품이 설정과 불일치하는지",
+    idPrefix: "ch",
+  },
+  {
+    name: "foreshadow-checker",
+    issueType: "foreshadowing_gap",
+    focus: "설정에 심어진 복선·단서·아이템이 원고에서 회수되지 않거나 무시되는지",
+    idPrefix: "fs",
+  },
+];
+
+function buildConflictSubAgentPrompt(config: ConflictAgentConfig): string {
+  return [
+    `너는 한국어 소설의 '${config.focus}'만 전문적으로 검출하는 서브에이전트다.`,
+    "다른 유형의 충돌은 무시하고 네 담당 유형에만 집중한다.",
+    "",
+    "작업 방식:",
+    "1. 전달받은 원고에서 네 담당 유형의 검증 포인트를 모두 찾는다.",
+    "2. 각 포인트마다 search_settings 도구를 호출해 관련 설정 근거를 직접 검색한다.",
+    "3. 원고가 설정과 충돌하는 부분만 issue 로 정리한다.",
+    "",
+    "환각 금지(반드시 지킬 것):",
+    "- conflictingSetting 에는 search_settings 가 실제로 돌려준 문장만 그대로 인용한다. 설정을 지어내지 마라.",
+    "- search_settings 로 근거를 못 찾으면 그 포인트는 issue 로 만들지 않는다(추측 금지).",
+    "- '설정이 없다/미확인'은 충돌이 아니다. 설정과 원고가 '서로 모순'될 때만 issue 다.",
+    "- manuscriptQuote 는 전달받은 원고에 글자 그대로 존재하는 문장이어야 한다.",
+    "- 확신이 없으면 issue 를 만들지 않는다. 적게, 정확하게.",
+    "",
+    `- 네가 만드는 issue.type 은 반드시 "${config.issueType}" 이다.`,
+    `- 모든 id(issue/node)는 "${config.idPrefix}_" 로 시작시켜 다른 검사기와 겹치지 않게 한다.`,
+    "  (예: issue id = " + `"${config.idPrefix}_issue_1"` + ", 인물 node id = " + `"${config.idPrefix}_char_minjun"` + ")",
+    "",
+    OUTPUT_RULES,
+  ].join("\n");
+}
+
+const ORCHESTRATOR_PROMPT = [
+  "너는 한국어 소설의 '설정 붕괴(continuity error)' 검출을 총괄하는 오케스트레이터다.",
+  "직접 분석하지 말고, 계획을 세운 뒤 전문 서브에이전트에게 위임하고 결과를 종합한다.",
+  "",
+  "절차:",
+  "1. write_todos 로 검증 계획을 세운다(긴 원고는 장/장면 단위로 쪼갠다).",
+  "2. task 도구로 각 유형 전문 서브에이전트에게 위임한다. 위임할 때 원고 전문과",
+  "   '무엇을 확인해야 하는지'를 함께 전달한다. 사용할 subagent_type:",
+  CONFLICT_AGENTS.map((agent) => `   - ${agent.name}: ${agent.focus}`).join("\n"),
+  "3. 각 서브에이전트가 돌려준 issues/nodes/edges 를 하나로 '합친다'.",
+  "   - 새로 만들지 말고 받은 항목을 그대로 모은다. node.id 가 중복되면 하나만 남긴다.",
+  "   - dangling 참조(존재하지 않는 node.id)는 버린다.",
+  "4. 합쳐진 최종 {issues, nodes, edges} 를 반환한다. 충돌이 없으면 모두 빈 배열.",
 ].join("\n");
 
 function getTimeoutMs(): number {
@@ -114,12 +183,11 @@ function createAgentModel(): ChatOpenAI {
       throw new Error("OPENAI_API_KEY is required for deepagent backend=openai");
     }
     return new ChatOpenAI({
-      model:
-        process.env.DEEPAGENT_MODEL?.trim() ||
-        process.env.OPENAI_ANALYSIS_MODEL?.trim() ||
-        DEFAULT_OPENAI_MODEL,
+      model: process.env.DEEPAGENT_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
       apiKey: openaiKey,
       temperature: 0,
+      // 멀티에이전트는 토큰을 빨리 써서 일시적 429(TPM)가 날 수 있다. 백오프 재시도로 흡수.
+      maxRetries: 4,
       configuration: {
         baseURL:
           process.env.OPENAI_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_OPENAI_API_BASE_URL,
@@ -138,6 +206,7 @@ function createAgentModel(): ChatOpenAI {
         DEFAULT_GROQ_MODEL,
       apiKey: groqKey,
       temperature: 0,
+      maxRetries: 4,
       configuration: {
         baseURL: process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL,
       },
@@ -199,6 +268,19 @@ function createSearchSettingsTool(input: GraphAnalysisInput) {
   );
 }
 
+/** 충돌 유형별 전문 서브에이전트 4종. 각자 search_settings 도구를 갖고 자기 유형만 검출한다. */
+function buildConflictSubAgents(
+  searchSettings: ReturnType<typeof createSearchSettingsTool>,
+): SubAgent[] {
+  return CONFLICT_AGENTS.map((config) => ({
+    name: config.name,
+    description: `${config.focus} 전문 검출`,
+    systemPrompt: buildConflictSubAgentPrompt(config),
+    tools: [searchSettings],
+    responseFormat: toolStrategy(analysisResponseSchema),
+  }));
+}
+
 function buildUserMessage(input: GraphAnalysisInput): string {
   const { projectTitle, genre, manuscriptText } = input.request;
 
@@ -256,11 +338,13 @@ export function createDeepAgentStoryAnalysisProvider(): StoryAnalysisProvider {
     async analyze(input: GraphAnalysisInput): Promise<GraphAnalysisResult> {
       const model = createAgentModel();
       const searchSettings = createSearchSettingsTool(input);
+      const subagents = buildConflictSubAgents(searchSettings);
 
       const agent = createDeepAgent({
         model,
         tools: [searchSettings],
-        systemPrompt: SYSTEM_PROMPT,
+        subagents,
+        systemPrompt: ORCHESTRATOR_PROMPT,
         responseFormat: toolStrategy(analysisResponseSchema),
       });
 

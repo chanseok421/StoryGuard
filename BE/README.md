@@ -133,10 +133,12 @@ All providers implement the same `StoryAnalysisProvider` interface (`src/graph/p
 
 ### Deep Agent provider (`deepagent`)
 
-`groq`/`ollama`/`openai` run a single-prompt RAG pipeline: retrieve evidence once, then one LLM call produces the JSON. `deepagent` instead runs a [LangGraph](https://docs.langchain.com/oss/javascript/deepagents/overview)-based deep agent (the `deepagents` package) that:
+`groq`/`ollama`/`openai` run a single-prompt RAG pipeline: retrieve evidence once, then one LLM call produces the JSON. `deepagent` instead runs a [LangGraph](https://docs.langchain.com/oss/javascript/deepagents/overview)-based deep agent (the `deepagents` package) where an **orchestrator**:
 
-- exposes RAG search as a **tool** (`search_settings`) the agent calls on demand, instead of a fixed top-K passed up front;
-- returns structured output via `toolStrategy`, still validated by `validateGraphAnalysisResult`;
+- plans the review with `write_todos` (splitting long manuscripts into chapters);
+- delegates to four type-specific **sub-agents** via the built-in `task` tool — `world-rule-checker`, `timeline-checker`, `character-checker`, `foreshadow-checker`;
+- each agent exposes RAG search as a **tool** (`search_settings`) it calls on demand, instead of a fixed top-K passed up front;
+- merges the sub-graphs and returns structured output via `toolStrategy`, still validated by `validateGraphAnalysisResult`;
 - falls back to the rule-based path automatically if the agent fails (same safety net as other providers).
 
 Because the deep agent is just another provider, the rest of the system is untouched — short inputs can keep the cheap deterministic path while long/complex inputs use the agent.
@@ -145,10 +147,14 @@ Because the deep agent is just another provider, the rest of the system is untou
 AI_ANALYSIS_PROVIDER=deepagent
 # Backend: openai | groq (auto-detected from available keys, openai first)
 DEEPAGENT_BACKEND=
-# Override the backend's default model (e.g. gpt-4o for more reliable tool use)
+# Override the model. OpenAI default is gpt-4o (NOT OPENAI_ANALYSIS_MODEL).
 DEEPAGENT_MODEL=
-DEEPAGENT_TIMEOUT_MS=90000
+DEEPAGENT_TIMEOUT_MS=180000
 ```
+
+**Model choice matters.** Multi-agent orchestration is sensitive to model strength. In testing, `gpt-4o-mini` hallucinated settings, raised false positives, and intermittently hit tool-call parity errors; `gpt-4o` cleanly detected all planted conflicts (including the foreshadowing gap a single prompt missed) with no hallucination. The OpenAI default is therefore `gpt-4o`, independent of the cheaper `OPENAI_ANALYSIS_MODEL` used by the single-prompt path.
+
+**Cost / throughput.** Fanning the manuscript out to four sub-agents is token-heavy — a single run can exceed a low OpenAI TPM tier (e.g. 30k/min on tier 1) and 429. Transient 429s are retried (`maxRetries`), and any hard failure falls back to the rule-based path, but heavy use benefits from a higher OpenAI tier.
 
 Smoke-test the agent loop end-to-end (calls the provider directly, bypassing HTTP/embedding retrieval):
 
@@ -157,6 +163,6 @@ npm run smoke:deepagent       # uses C:\Secrets\storyguard.env
 npm run smoke:deepagent:mac   # uses ~/Secrets/storyguard.env
 ```
 
-> Status: `search_settings` tool + single-agent loop is wired and verified. Type-specific sub-agents (world-rule / timeline / character / foreshadow) and `write_todos` chapter-level planning are the next step.
+> Status: orchestrator + 4 type-specific sub-agents + `write_todos` planning wired and verified end-to-end on `gpt-4o` (3/3 conflicts detected, no fallback).
 
 Do not paste or share `docker compose config`, `docker inspect`, or container environment output because those commands can print secrets from `env_file`.

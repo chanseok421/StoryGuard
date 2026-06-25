@@ -31,7 +31,7 @@ const input: GraphAnalysisInput = {
 
 async function main() {
   console.log("[smoke] provider =", process.env.AI_ANALYSIS_PROVIDER);
-  console.log("[smoke] model    =", process.env.DEEPAGENT_MODEL || process.env.OPENAI_ANALYSIS_MODEL || "(default)");
+  console.log("[smoke] model    =", process.env.DEEPAGENT_MODEL || "(provider default — openai: gpt-4o)");
   const started = Date.now();
 
   const result = await runStoryAnalysisDetailed(input);
