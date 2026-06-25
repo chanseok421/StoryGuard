@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://storyguard.local/schemas/graph-analysis-result.json",
+  "title": "GraphAnalysisResult",
+  "description": "분석 LLM(groq/ollama)이 반드시 이 형태로 반환해야 하는 구조화 출력. summary/evidence/providerInfo는 서버가 덧붙이므로 LLM은 issues/nodes/edges만 생성한다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issues", "nodes", "edges"],
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "type", "severity", "title", "manuscriptQuote",
+          "conflictingSetting", "reason", "suggestion", "relatedNodeIds", "evidenceIds"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": [
+              "character_conflict",
+              "world_rule_conflict",
+              "timeline_conflict",
+              "causality_conflict",
+              "foreshadowing_gap"
+            ]
+          },
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "title": { "type": "string" },
+          "manuscriptQuote": { "type": "string" },
+          "conflictingSetting": { "type": "string" },
+          "reason": { "type": "string" },
+          "suggestion": { "type": "string" },
+          "relatedNodeIds": { "type": "array", "items": { "type": "string" } },
+          "evidenceIds": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "label", "type", "importance", "hasIssue"],
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["character", "event", "rule", "place", "foreshadow", "issue"]
+          },
+          "importance": { "type": "number" },
+          "hasIssue": { "type": "boolean" }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "label", "type"],
+        "properties": {
+          "source": { "type": "string" },
+          "target": { "type": "string" },
+          "label": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["relationship", "causes", "violates", "located_at", "foreshadows"]
+          }
+        }
+      }
+    }
+  }
+}

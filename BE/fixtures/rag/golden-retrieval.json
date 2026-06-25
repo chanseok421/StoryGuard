@@ -1,0 +1,75 @@
+{
+  "projectId": "storyguard-demo",
+  "evaluation": {
+    "primaryMetric": "hitAt3",
+    "secondaryMetric": "recallAt3",
+    "topK": 3,
+    "rules": {
+      "hitAt3": "상위 3개 검색 결과에 requiredSettingIds가 하나 이상 포함되면 성공",
+      "recallAt3": "상위 3개 검색 결과에 포함된 relevantSettingIds 비율",
+      "requiredSettingIds": "장면을 이해하기 위해 반드시 검색되어야 하는 핵심 설정",
+      "supportingSettingIds": "핵심 설정을 보완하지만 누락되어도 Hit@3 실패로 처리하지 않는 설정"
+    }
+  },
+  "cases": [
+    {
+      "sceneId": "scene-001",
+      "requiredSettingIds": ["setting-005", "setting-008"],
+      "supportingSettingIds": ["setting-010"],
+      "relevantSettingIds": ["setting-005", "setting-008", "setting-010"],
+      "rationale": "민준이 사망한 시점과 죽은 사람은 되살아날 수 없다는 세계관 규칙이 핵심 근거다."
+    },
+    {
+      "sceneId": "scene-002",
+      "requiredSettingIds": ["setting-003"],
+      "supportingSettingIds": ["setting-006"],
+      "relevantSettingIds": ["setting-003", "setting-006"],
+      "rationale": "10초 회귀와 연속 사용을 판단하려면 하루 한 번, 최대 3초라는 능력 제한이 반드시 필요하다."
+    },
+    {
+      "sceneId": "scene-003",
+      "requiredSettingIds": ["setting-009"],
+      "supportingSettingIds": ["setting-003"],
+      "relevantSettingIds": ["setting-009", "setting-003"],
+      "rationale": "하린 외의 인물이 이전 시간선을 기억하는 장면이므로 회귀 기억 보존 규칙이 핵심 근거다."
+    },
+    {
+      "sceneId": "scene-004",
+      "requiredSettingIds": ["setting-003", "setting-004", "setting-007"],
+      "supportingSettingIds": ["setting-006"],
+      "relevantSettingIds": ["setting-003", "setting-004", "setting-006", "setting-007"],
+      "rationale": "3초 회귀, 하루 한 번 사용, 두통과 기억 흐림, 달빛 활성 조건이 모두 장면과 직접 관련된다."
+    },
+    {
+      "sceneId": "scene-005",
+      "requiredSettingIds": ["setting-008", "setting-010"],
+      "supportingSettingIds": ["setting-002"],
+      "relevantSettingIds": ["setting-002", "setting-008", "setting-010"],
+      "rationale": "민준의 사망 시점과 사후에 남은 음성 기록 및 수첩 설정이 장면의 직접 근거다."
+    },
+    {
+      "sceneId": "scene-006",
+      "difficulty": "hard",
+      "requiredSettingIds": ["setting-007"],
+      "supportingSettingIds": ["setting-006"],
+      "relevantSettingIds": ["setting-007"],
+      "rationale": "'달빛/햇빛/활성화' 같은 단어 없이 '낮에는 안 되고 어두워진 뒤에 된다'로만 묘사해, 회중시계의 활성 조건을 의미로만 찾아야 한다."
+    },
+    {
+      "sceneId": "scene-007",
+      "difficulty": "hard",
+      "requiredSettingIds": ["setting-005"],
+      "supportingSettingIds": [],
+      "relevantSettingIds": ["setting-005"],
+      "rationale": "'죽음/부활/되살림' 단어 없이 '숨이 멎은 이는 깨어나지 않는다'로 의역해, 부활 금지 법칙을 의미 검색으로만 찾아야 한다."
+    },
+    {
+      "sceneId": "scene-008",
+      "difficulty": "hard",
+      "requiredSettingIds": ["setting-004"],
+      "supportingSettingIds": [],
+      "relevantSettingIds": ["setting-004"],
+      "rationale": "'두통/기억' 단어 없이 '관자놀이 통증과 머릿속이 뿌예짐'으로 묘사해, 회귀의 대가 설정을 의미로만 찾아야 한다."
+    }
+  ]
+}

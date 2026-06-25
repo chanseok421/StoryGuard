@@ -1,0 +1,275 @@
+import type { AnalyzeRequest, AnalyzeResponse } from "../shared/types.js";
+import { runStoryAnalysisDetailed } from "../graph/runStoryAnalysis.js";
+import { retrieveEvidence } from "../rag/retrieveEvidence.js";
+import { retrieveEvidenceWithEmbeddings } from "../rag/embeddingRetrieveEvidence.js";
+import { retrieveEvidenceFromVectorStore } from "../rag/retrieveEvidenceFromVectorStore.js";
+
+export const mockAnalyzeResponse: AnalyzeResponse = {
+  summary: {
+    issueCount: 3,
+    highCount: 1,
+    mediumCount: 1,
+    lowCount: 1,
+  },
+  issues: [
+    {
+      id: "issue_001",
+      type: "world_rule_conflict",
+      severity: "high",
+      title: "부활 금지 규칙과 충돌",
+      manuscriptQuote:
+        "하린은 민준의 손을 잡고 주문을 완성하자, 이미 죽었던 민준이 완전히 되살아났다.",
+      conflictingSetting:
+        "이 세계에서는 죽은 사람을 완전히 부활시킬 수 없으며, 시간 되돌리기는 사망 직전 3초까지만 가능하다.",
+      reason:
+        "원고는 민준의 완전한 부활을 서술하지만, 기존 세계관 규칙은 완전 부활을 금지하고 3초 되돌리기만 허용합니다.",
+      suggestion:
+        "완전한 부활 대신 하린이 사망 직전 3초를 되돌려 민준의 치명상을 피하게 만드는 장면으로 바꾸세요.",
+      relatedNodeIds: [
+        "char_harin",
+        "char_minjun",
+        "rule_no_resurrection",
+        "rule_three_second_rewind",
+        "issue_001",
+      ],
+      evidenceIds: ["ev_setting_resurrection", "ev_manuscript_minjun_revived"],
+    },
+    {
+      id: "issue_002",
+      type: "timeline_conflict",
+      severity: "medium",
+      title: "왕궁 화재 날짜와 목격 장면 충돌",
+      manuscriptQuote:
+        "왕궁 화재가 일어난 다음 날, 하린은 아직 수도에 도착하지 않은 민준과 함께 폐허를 조사했다.",
+      conflictingSetting: "민준은 왕궁 화재 사흘 뒤에야 북부 전선에서 수도로 복귀했다.",
+      reason:
+        "원고는 화재 다음 날 민준이 수도 폐허에 있었다고 하지만, 설정상 민준은 그 시점에 아직 수도에 도착하지 않았습니다.",
+      suggestion:
+        "조사 장면의 시점을 화재 사흘 뒤 이후로 옮기거나, 하린이 혼자 단서를 발견하고 민준에게 나중에 공유하게 하세요.",
+      relatedNodeIds: ["char_harin", "char_minjun", "event_palace_fire", "place_capital", "issue_002"],
+      evidenceIds: ["ev_setting_minjun_return", "ev_manuscript_palace_next_day"],
+    },
+    {
+      id: "issue_003",
+      type: "foreshadowing_gap",
+      severity: "low",
+      title: "푸른 나침반 떡밥 회수 부족",
+      manuscriptQuote: "하린은 별다른 단서 없이 숨겨진 동쪽 문을 찾아냈다.",
+      conflictingSetting:
+        "푸른 나침반은 동쪽 문이 열릴 때만 빛나며, 하린이 후반부에 비밀 통로를 찾는 핵심 단서다.",
+      reason:
+        "설정상 푸른 나침반이 비밀 통로 발견의 단서인데, 원고에서는 나침반을 사용하지 않아 기존 떡밥과 연결이 약합니다.",
+      suggestion: "동쪽 문을 찾는 장면에 푸른 나침반이 빛나는 묘사를 추가해 이전 설정을 회수하세요.",
+      relatedNodeIds: ["char_harin", "foreshadow_blue_compass", "place_east_gate", "issue_003"],
+      evidenceIds: ["ev_setting_blue_compass", "ev_manuscript_east_gate"],
+    },
+  ],
+  nodes: [
+    { id: "char_harin", label: "하린", type: "character", importance: 5, hasIssue: true },
+    { id: "char_minjun", label: "민준", type: "character", importance: 4, hasIssue: true },
+    { id: "rule_no_resurrection", label: "완전 부활 금지", type: "rule", importance: 5, hasIssue: true },
+    {
+      id: "rule_three_second_rewind",
+      label: "3초 시간 되돌리기",
+      type: "rule",
+      importance: 5,
+      hasIssue: true,
+    },
+    { id: "event_palace_fire", label: "왕궁 화재", type: "event", importance: 4, hasIssue: true },
+    { id: "place_capital", label: "수도", type: "place", importance: 3, hasIssue: true },
+    {
+      id: "foreshadow_blue_compass",
+      label: "푸른 나침반",
+      type: "foreshadow",
+      importance: 3,
+      hasIssue: true,
+    },
+    { id: "place_east_gate", label: "동쪽 문", type: "place", importance: 2, hasIssue: true },
+    { id: "issue_001", label: "부활 규칙 충돌", type: "issue", importance: 5, hasIssue: true },
+    { id: "issue_002", label: "화재 날짜 충돌", type: "issue", importance: 4, hasIssue: true },
+    { id: "issue_003", label: "나침반 떡밥 공백", type: "issue", importance: 2, hasIssue: true },
+  ],
+  edges: [
+    {
+      source: "char_harin",
+      target: "rule_three_second_rewind",
+      label: "사용 가능",
+      type: "relationship",
+    },
+    {
+      source: "rule_three_second_rewind",
+      target: "rule_no_resurrection",
+      label: "제한됨",
+      type: "violates",
+    },
+    { source: "issue_001", target: "rule_no_resurrection", label: "위반", type: "violates" },
+    { source: "issue_001", target: "char_minjun", label: "대상", type: "relationship" },
+    { source: "event_palace_fire", target: "place_capital", label: "발생 장소", type: "located_at" },
+    { source: "issue_002", target: "event_palace_fire", label: "시간 충돌", type: "causes" },
+    { source: "issue_002", target: "char_minjun", label: "등장 시점 충돌", type: "relationship" },
+    {
+      source: "foreshadow_blue_compass",
+      target: "place_east_gate",
+      label: "문을 가리킴",
+      type: "foreshadows",
+    },
+    { source: "issue_003", target: "foreshadow_blue_compass", label: "회수 필요", type: "foreshadows" },
+  ],
+  evidence: [
+    {
+      id: "ev_setting_resurrection",
+      sourceType: "setting",
+      quote:
+        "이 세계에서는 죽은 사람을 완전히 부활시킬 수 없다. 하린의 시간 되돌리기는 사망 직전 3초까지만 가능하다.",
+      chunkId: "chunk_setting_001",
+      score: 0.96,
+    },
+    {
+      id: "ev_manuscript_minjun_revived",
+      sourceType: "manuscript",
+      quote: "하린은 민준의 손을 잡고 주문을 완성하자, 이미 죽었던 민준이 완전히 되살아났다.",
+      chunkId: "chunk_manuscript_001",
+      score: 0.94,
+    },
+    {
+      id: "ev_setting_minjun_return",
+      sourceType: "setting",
+      quote: "민준은 왕궁 화재 사흘 뒤에야 북부 전선에서 수도로 복귀했다.",
+      chunkId: "chunk_setting_002",
+      score: 0.91,
+    },
+    {
+      id: "ev_manuscript_palace_next_day",
+      sourceType: "manuscript",
+      quote: "왕궁 화재가 일어난 다음 날, 하린은 아직 수도에 도착하지 않은 민준과 함께 폐허를 조사했다.",
+      chunkId: "chunk_manuscript_002",
+      score: 0.88,
+    },
+    {
+      id: "ev_setting_blue_compass",
+      sourceType: "setting",
+      quote: "푸른 나침반은 동쪽 문이 열릴 때만 빛나며, 하린이 후반부에 비밀 통로를 찾는 핵심 단서다.",
+      chunkId: "chunk_setting_003",
+      score: 0.84,
+    },
+    {
+      id: "ev_manuscript_east_gate",
+      sourceType: "manuscript",
+      quote: "하린은 별다른 단서 없이 숨겨진 동쪽 문을 찾아냈다.",
+      chunkId: "chunk_manuscript_003",
+      score: 0.79,
+    },
+  ],
+  providerInfo: {
+    provider: "mock",
+    fallbackUsed: false,
+  },
+};
+
+export async function analyze(request: AnalyzeRequest): Promise<AnalyzeResponse> {
+  const normalizedRequest = normalizeAnalyzeRequest(request);
+
+  if (!normalizedRequest) {
+    return fallbackAnalyzeResponse();
+  }
+
+  try {
+    const retrievalInput = {
+      projectId: normalizedRequest.projectId,
+      settingsText: normalizedRequest.settingsText,
+      manuscriptText: normalizedRequest.manuscriptText,
+    };
+
+    // 1순위: 사전 임베딩된 vectorDB(projectId 있을 때). 설정이 ingest돼 있으면 여기서 끝.
+    // 2순위: settingsText를 즉석 임베딩(Ollama). 3순위: keyword RAG.
+    let retrieval = { chunks: [], evidence: [], relatedSettings: [] } as Awaited<
+      ReturnType<typeof retrieveEvidence>
+    >;
+    let ragProvider: "ollama" | "mock" = "ollama";
+
+    if (normalizedRequest.projectId) {
+      retrieval = await retrieveEvidenceFromVectorStore({
+        projectId: normalizedRequest.projectId,
+        manuscriptText: normalizedRequest.manuscriptText,
+      });
+    }
+
+    if (retrieval.evidence.length === 0) {
+      retrieval = await retrieveEvidenceWithEmbeddings(retrievalInput);
+    }
+
+    if (retrieval.evidence.length === 0) {
+      retrieval = await retrieveEvidence(retrievalInput);
+      ragProvider = "mock";
+    }
+
+    const analysis = await runStoryAnalysisDetailed({
+      request: normalizedRequest,
+      evidence: retrieval.evidence,
+      relatedSettings: retrieval.relatedSettings,
+    });
+    const graphResult = analysis.graph;
+
+    return {
+      summary: buildSummary(graphResult.issues),
+      issues: graphResult.issues,
+      nodes: graphResult.nodes,
+      edges: graphResult.edges,
+      evidence: retrieval.evidence,
+      providerInfo: {
+        provider: analysis.provider,
+        fallbackUsed: analysis.fallbackUsed || ragProvider !== "ollama",
+      },
+    };
+  } catch {
+    return fallbackAnalyzeResponse();
+  }
+}
+
+function normalizeAnalyzeRequest(request: AnalyzeRequest): AnalyzeRequest | null {
+  const candidate = request as Partial<AnalyzeRequest> | null | undefined;
+
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+
+  if (
+    !isNonEmptyString(candidate.projectTitle) ||
+    !isNonEmptyString(candidate.settingsText) ||
+    !isNonEmptyString(candidate.manuscriptText)
+  ) {
+    return null;
+  }
+
+  return {
+    projectId: typeof candidate.projectId === "string" ? candidate.projectId : undefined,
+    projectTitle: candidate.projectTitle,
+    genre: typeof candidate.genre === "string" ? candidate.genre : undefined,
+    settingsText: candidate.settingsText,
+    manuscriptText: candidate.manuscriptText,
+    options: candidate.options,
+  };
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function buildSummary(issues: AnalyzeResponse["issues"]): AnalyzeResponse["summary"] {
+  return {
+    issueCount: issues.length,
+    highCount: issues.filter((issue) => issue.severity === "high").length,
+    mediumCount: issues.filter((issue) => issue.severity === "medium").length,
+    lowCount: issues.filter((issue) => issue.severity === "low").length,
+  };
+}
+
+function fallbackAnalyzeResponse(): AnalyzeResponse {
+  return {
+    ...mockAnalyzeResponse,
+    providerInfo: {
+      provider: "mock",
+      fallbackUsed: true,
+    },
+  };
+}

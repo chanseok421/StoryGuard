@@ -1,0 +1,185 @@
+openapi: 3.1.0
+info:
+  title: StoryGuard Analyze API
+  version: 0.1.0
+  description: |
+    설정집(settingsText)과 원고(manuscriptText)를 받아 설정 충돌(설정 붕괴) 이슈와
+    세계관 그래프(nodes/edges), 근거(evidence)를 반환한다.
+servers:
+  - url: http://localhost:4000
+paths:
+  /api/analyze:
+    post:
+      operationId: analyze
+      summary: 원고-설정 충돌 분석
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeRequest"
+            examples:
+              basic:
+                value:
+                  projectTitle: "백일항"
+                  settingsText: "유리왕관은 피를 흘린 왕족만 착용할 수 있다. 오윤서는 평민이며 물의 계승권이 없다."
+                  manuscriptText: "오윤서는 평민이며 물의 계승권도 없지만 유리왕관을 직접 착용했다."
+      responses:
+        "200":
+          description: 분석 결과. (입력이 부족하거나 내부 오류여도 200 + mock fallback)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeResponse"
+components:
+  schemas:
+    AnalyzeRequest:
+      type: object
+      required: [projectTitle, settingsText, manuscriptText]
+      additionalProperties: false
+      properties:
+        projectId:
+          type: string
+          description: 있으면 Qdrant 벡터검색을 우선 사용. 없으면 settingsText를 즉석 임베딩.
+        projectTitle:
+          type: string
+          minLength: 1
+        genre:
+          type: string
+        settingsText:
+          type: string
+          minLength: 1
+          description: 설정집 원문
+        manuscriptText:
+          type: string
+          minLength: 1
+          description: 분석할 원고 원문
+        options:
+          type: object
+          additionalProperties: false
+          properties:
+            useRag: { type: boolean }
+            useGraph: { type: boolean }
+            provider:
+              $ref: "#/components/schemas/Provider"
+          description: |
+            현재 분석 provider는 요청이 아니라 서버 env(AI_ANALYSIS_PROVIDER)로 결정된다.
+    AnalyzeResponse:
+      type: object
+      required: [summary, issues, nodes, edges, evidence, providerInfo]
+      additionalProperties: false
+      properties:
+        summary:
+          $ref: "#/components/schemas/Summary"
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/Issue" }
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/StoryNode" }
+        edges:
+          type: array
+          items: { $ref: "#/components/schemas/StoryEdge" }
+        evidence:
+          type: array
+          items: { $ref: "#/components/schemas/Evidence" }
+        providerInfo:
+          $ref: "#/components/schemas/ProviderInfo"
+    Summary:
+      type: object
+      required: [issueCount, highCount, mediumCount, lowCount]
+      additionalProperties: false
+      properties:
+        issueCount: { type: integer, minimum: 0 }
+        highCount: { type: integer, minimum: 0 }
+        mediumCount: { type: integer, minimum: 0 }
+        lowCount: { type: integer, minimum: 0 }
+    Issue:
+      type: object
+      required:
+        [id, type, severity, title, manuscriptQuote, conflictingSetting, reason, suggestion, relatedNodeIds, evidenceIds]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum:
+            - character_conflict
+            - world_rule_conflict
+            - timeline_conflict
+            - causality_conflict
+            - foreshadowing_gap
+        severity:
+          type: string
+          enum: [high, medium, low]
+        title: { type: string }
+        manuscriptQuote:
+          type: string
+          description: 충돌이 일어난 원고 인용
+        conflictingSetting:
+          type: string
+          description: 충돌하는 기존 설정
+        reason: { type: string }
+        suggestion: { type: string }
+        relatedNodeIds:
+          type: array
+          items: { type: string }
+          description: StoryNode.id 참조
+        evidenceIds:
+          type: array
+          items: { type: string }
+          description: Evidence.id 참조
+    StoryNode:
+      type: object
+      required: [id, label, type, importance, hasIssue]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        label: { type: string }
+        type:
+          type: string
+          enum: [character, event, rule, place, foreshadow, issue]
+        importance: { type: number }
+        hasIssue: { type: boolean }
+    StoryEdge:
+      type: object
+      required: [source, target, label]
+      additionalProperties: false
+      properties:
+        source:
+          type: string
+          description: StoryNode.id
+        target:
+          type: string
+          description: StoryNode.id
+        label: { type: string }
+        type:
+          type: string
+          enum: [relationship, causes, violates, located_at, foreshadows]
+    Evidence:
+      type: object
+      required: [id, sourceType, quote]
+      additionalProperties: false
+      properties:
+        id: { type: string }
+        sourceType:
+          type: string
+          enum: [setting, manuscript, chunk]
+        quote: { type: string }
+        chunkId: { type: string }
+        score:
+          type: number
+          description: 코사인 유사도(0~1)
+    Provider:
+      type: string
+      enum: [groq, ollama, mock]
+    ProviderInfo:
+      type: object
+      required: [provider, fallbackUsed]
+      additionalProperties: false
+      properties:
+        provider:
+          $ref: "#/components/schemas/Provider"
+        fallbackUsed:
+          type: boolean
+          description: true면 AI 분석 또는 RAG가 실패해 rule-based/keyword로 대체된 것.
