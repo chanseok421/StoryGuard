@@ -1,6 +1,6 @@
 export type ID = string;
 export type ISODateTime = string;
-export type Provider = "groq" | "ollama" | "mock" | "openai";
+export type Provider = "groq" | "ollama" | "mock" | "openai" | "deepagent";
 
 export type ApiError = {
   error: {

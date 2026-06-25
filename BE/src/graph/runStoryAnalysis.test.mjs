@@ -25,6 +25,10 @@ async function loadGraphModule() {
       "NodeNext",
       "--target",
       "ES2022",
+      // tsconfig.json과 동일하게 맞춘다. 이게 없으면 deepagent provider가 끌어오는
+      // deepagents/langgraph 제네릭 추론이 깨져 컴파일이 실패한다.
+      "--strict",
+      "--esModuleInterop",
       "--skipLibCheck",
       "src/graph/runStoryAnalysis.ts",
       "src/shared/types.ts",

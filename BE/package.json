@@ -26,6 +26,7 @@
   "dependencies": {
     "@langchain/classic": "^1.0.36",
     "@langchain/core": "^1.2.0",
+    "@langchain/langgraph": "^1.4.6",
     "@langchain/ollama": "^1.3.0",
     "@langchain/openai": "^1.5.1",
     "@qdrant/js-client-rest": "^1.18.0",
@@ -33,7 +34,9 @@
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "deepagents": "^1.10.5",
+    "express": "^4.19.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
