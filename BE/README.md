@@ -154,7 +154,7 @@ DEEPAGENT_TIMEOUT_MS=180000
 
 **Model choice matters.** Multi-agent orchestration is sensitive to model strength. In testing, `gpt-4o-mini` hallucinated settings, raised false positives, and intermittently hit tool-call parity errors; `gpt-4o` cleanly detected all planted conflicts (including the foreshadowing gap a single prompt missed) with no hallucination. The OpenAI default is therefore `gpt-4o`, independent of the cheaper `OPENAI_ANALYSIS_MODEL` used by the single-prompt path.
 
-**Cost / throughput.** Fanning the manuscript out to four sub-agents is token-heavy — a single run can exceed a low OpenAI TPM tier (e.g. 30k/min on tier 1) and 429. Transient 429s are retried (`maxRetries`), and any hard failure falls back to the rule-based path, but heavy use benefits from a higher OpenAI tier.
+**Cost / throughput.** Fanning the manuscript out to four sub-agents is token-heavy — a single run can exceed a low TPM tier (OpenAI tier-1 gpt-4o is 30k/min; Groq free is 8k/min) and 429. To stay under the cap without paying for a higher tier, the provider **throttles LLM calls** (`DEEPAGENT_REQUESTS_PER_SECOND`, default 0.1 = 1 call / 10s) via a shared gate across the orchestrator and all sub-agents, plus retry-after backoff (`maxRetries`) for any spike. One run then takes ~1.5–3 min and completes cleanly on tier-1 gpt-4o. Raise the value on a higher tier for speed.
 
 Smoke-test the agent loop end-to-end (calls the provider directly, bypassing HTTP/embedding retrieval):
 
@@ -163,6 +163,6 @@ npm run smoke:deepagent       # uses C:\Secrets\storyguard.env
 npm run smoke:deepagent:mac   # uses ~/Secrets/storyguard.env
 ```
 
-> Status: orchestrator + 4 type-specific sub-agents + `write_todos` planning wired and verified end-to-end on `gpt-4o` (3/3 conflicts detected, no fallback).
+> Status: orchestrator + 4 type-specific sub-agents + `write_todos` planning, with call throttling, verified end-to-end on `gpt-4o` over a tier-1 OpenAI account (~99s, 3/3 conflicts detected, no 429, no fallback).
 
 Do not paste or share `docker compose config`, `docker inspect`, or container environment output because those commands can print secrets from `env_file`.
