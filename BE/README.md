@@ -127,6 +127,36 @@ Story analysis can run in mock fallback mode or through an AI provider:
 AI_ANALYSIS_PROVIDER=mock
 ```
 
-Supported values are `mock`, `groq`, and `ollama`. `mock` keeps the local rule-based fallback. For Groq, set `GROQ_API_KEY` and optionally `GROQ_ANALYSIS_MODEL=openai/gpt-oss-120b`. For local Ollama QA, set `AI_ANALYSIS_PROVIDER=ollama` and `OLLAMA_ANALYSIS_MODEL`.
+Supported values are `mock`, `groq`, `ollama`, `openai`, and `deepagent`. `mock` keeps the local rule-based fallback. For Groq, set `GROQ_API_KEY` and optionally `GROQ_ANALYSIS_MODEL=openai/gpt-oss-120b`. For OpenAI, set `OPENAI_API_KEY` and optionally `OPENAI_ANALYSIS_MODEL`. For local Ollama QA, set `AI_ANALYSIS_PROVIDER=ollama` and `OLLAMA_ANALYSIS_MODEL`.
+
+All providers implement the same `StoryAnalysisProvider` interface (`src/graph/providers`) and return the same `{ issues, nodes, edges }` shape, so the analyze route, validation, and rule-based fallback are provider-agnostic.
+
+### Deep Agent provider (`deepagent`)
+
+`groq`/`ollama`/`openai` run a single-prompt RAG pipeline: retrieve evidence once, then one LLM call produces the JSON. `deepagent` instead runs a [LangGraph](https://docs.langchain.com/oss/javascript/deepagents/overview)-based deep agent (the `deepagents` package) that:
+
+- exposes RAG search as a **tool** (`search_settings`) the agent calls on demand, instead of a fixed top-K passed up front;
+- returns structured output via `toolStrategy`, still validated by `validateGraphAnalysisResult`;
+- falls back to the rule-based path automatically if the agent fails (same safety net as other providers).
+
+Because the deep agent is just another provider, the rest of the system is untouched — short inputs can keep the cheap deterministic path while long/complex inputs use the agent.
+
+```env
+AI_ANALYSIS_PROVIDER=deepagent
+# Backend: openai | groq (auto-detected from available keys, openai first)
+DEEPAGENT_BACKEND=
+# Override the backend's default model (e.g. gpt-4o for more reliable tool use)
+DEEPAGENT_MODEL=
+DEEPAGENT_TIMEOUT_MS=90000
+```
+
+Smoke-test the agent loop end-to-end (calls the provider directly, bypassing HTTP/embedding retrieval):
+
+```bash
+npm run smoke:deepagent       # uses C:\Secrets\storyguard.env
+npm run smoke:deepagent:mac   # uses ~/Secrets/storyguard.env
+```
+
+> Status: `search_settings` tool + single-agent loop is wired and verified. Type-specific sub-agents (world-rule / timeline / character / foreshadow) and `write_todos` chapter-level planning are the next step.
 
 Do not paste or share `docker compose config`, `docker inspect`, or container environment output because those commands can print secrets from `env_file`.
