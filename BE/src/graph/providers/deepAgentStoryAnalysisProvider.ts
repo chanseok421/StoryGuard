@@ -12,7 +12,9 @@ import { validateGraphAnalysisResult } from "../validateGraphAnalysisResult.js";
 import type { StoryAnalysisProvider } from "./types.js";
 
 const DEFAULT_GROQ_API_BASE_URL = "https://api.groq.com/openai/v1";
-const DEFAULT_DEEPAGENT_MODEL = "openai/gpt-oss-120b";
+const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
+const DEFAULT_OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_RECURSION_LIMIT = 50;
 
@@ -88,24 +90,63 @@ function getTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_TIMEOUT_MS;
 }
 
+/**
+ * deepagent가 쓸 채팅 모델을 만든다. OpenAI / Groq(둘 다 OpenAI 호환 API) 중 선택.
+ * DEEPAGENT_BACKEND 로 명시할 수 있고, 미설정 시 키가 있는 쪽을 자동 감지한다(openai 우선).
+ * 모델명은 DEEPAGENT_MODEL 로 덮어쓸 수 있다.
+ */
 function createAgentModel(): ChatOpenAI {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("GROQ_API_KEY is required for deepagent analysis provider");
+  const explicit = process.env.DEEPAGENT_BACKEND?.trim().toLowerCase();
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  const groqKey = process.env.GROQ_API_KEY?.trim();
+
+  const backend =
+    explicit === "openai" || explicit === "groq"
+      ? explicit
+      : openaiKey
+        ? "openai"
+        : groqKey
+          ? "groq"
+          : null;
+
+  if (backend === "openai") {
+    if (!openaiKey) {
+      throw new Error("OPENAI_API_KEY is required for deepagent backend=openai");
+    }
+    return new ChatOpenAI({
+      model:
+        process.env.DEEPAGENT_MODEL?.trim() ||
+        process.env.OPENAI_ANALYSIS_MODEL?.trim() ||
+        DEFAULT_OPENAI_MODEL,
+      apiKey: openaiKey,
+      temperature: 0,
+      configuration: {
+        baseURL:
+          process.env.OPENAI_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_OPENAI_API_BASE_URL,
+      },
+    });
   }
 
-  const baseURL = process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL;
-  const model =
-    process.env.DEEPAGENT_MODEL?.trim() ||
-    process.env.GROQ_ANALYSIS_MODEL?.trim() ||
-    DEFAULT_DEEPAGENT_MODEL;
+  if (backend === "groq") {
+    if (!groqKey) {
+      throw new Error("GROQ_API_KEY is required for deepagent backend=groq");
+    }
+    return new ChatOpenAI({
+      model:
+        process.env.DEEPAGENT_MODEL?.trim() ||
+        process.env.GROQ_ANALYSIS_MODEL?.trim() ||
+        DEFAULT_GROQ_MODEL,
+      apiKey: groqKey,
+      temperature: 0,
+      configuration: {
+        baseURL: process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL,
+      },
+    });
+  }
 
-  return new ChatOpenAI({
-    model,
-    apiKey,
-    temperature: 0,
-    configuration: { baseURL },
-  });
+  throw new Error(
+    "deepagent provider requires OPENAI_API_KEY or GROQ_API_KEY (set DEEPAGENT_BACKEND to choose)",
+  );
 }
 
 /** 요청 컨텍스트(projectId/settingsText/manuscriptText)를 클로저로 묶은 RAG 검색 도구. */
