@@ -24,11 +24,21 @@ export function getSessionCookieName(): string {
   return process.env.SESSION_COOKIE_NAME || DEFAULT_SESSION_COOKIE_NAME;
 }
 
+function getSameSite(): "lax" | "strict" | "none" {
+  const value = process.env.COOKIE_SAMESITE?.trim().toLowerCase();
+  return value === "none" || value === "strict" ? value : "lax";
+}
+
 export function getSessionCookieOptions(): CookieOptions {
+  const sameSite = getSameSite();
+  // FE/BE가 다른 도메인(예: vercel + render)이면 크로스사이트 요청에 쿠키가 실리려면
+  // SameSite=None 이어야 하고, 브라우저는 그때 Secure를 강제한다.
+  const secure = process.env.COOKIE_SECURE === "true" || sameSite === "none";
+
   return {
     httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.COOKIE_SECURE === "true",
+    sameSite,
+    secure,
     path: "/",
     maxAge: SESSION_MAX_AGE_MS,
   };
