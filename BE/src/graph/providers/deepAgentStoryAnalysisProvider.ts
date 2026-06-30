@@ -1,10 +1,7 @@
 import { createDeepAgent, type SubAgent } from "deepagents";
-import { toolStrategy } from "langchain";
-import { ChatOpenAI, type ChatOpenAIFields } from "@langchain/openai";
+import { toolStrategy, createMiddleware } from "langchain";
+import { ChatOpenAI } from "@langchain/openai";
 import { tool } from "@langchain/core/tools";
-import type { BaseMessage } from "@langchain/core/messages";
-import type { ChatResult, ChatGenerationChunk } from "@langchain/core/outputs";
-import type { CallbackManagerForLLMRun } from "@langchain/core/callbacks/manager";
 import { z } from "zod";
 
 import type { GraphAnalysisInput, GraphAnalysisResult } from "../../shared/types.js";
@@ -193,32 +190,20 @@ function createThrottleGate(requestsPerSecond: number): () => Promise<void> {
   };
 }
 
-/** 매 LLM 호출 전에 throttle 게이트를 통과시키는 ChatOpenAI(=ChatGroq, OpenAI 호환). */
-class ThrottledChatOpenAI extends ChatOpenAI {
-  private readonly throttleGate: () => Promise<void>;
-
-  constructor(fields: ChatOpenAIFields, throttleGate: () => Promise<void>) {
-    super(fields);
-    this.throttleGate = throttleGate;
-  }
-
-  override async _generate(
-    messages: BaseMessage[],
-    options: this["ParsedCallOptions"],
-    runManager?: CallbackManagerForLLMRun,
-  ): Promise<ChatResult> {
-    await this.throttleGate();
-    return super._generate(messages, options, runManager);
-  }
-
-  override async *_streamResponseChunks(
-    messages: BaseMessage[],
-    options: this["ParsedCallOptions"],
-    runManager?: CallbackManagerForLLMRun,
-  ): AsyncGenerator<ChatGenerationChunk> {
-    await this.throttleGate();
-    yield* super._streamResponseChunks(messages, options, runManager);
-  }
+/**
+ * 호출 throttle 미들웨어. wrapModelCall 훅에서 매 모델 호출 직전에 게이트를 통과시킨다.
+ * 모델을 서브클래싱(_generate override)하지 않고 미들웨어로 가로채므로 프레임워크 내부
+ * 결합도가 낮다. 하나의 gate를 공유하면 오케스트레이터와 모든 서브에이전트의 호출이
+ * 한 게이트로 직렬화되어 분당 토큰을 TPM 한도 밑으로 유지한다.
+ */
+function createThrottleMiddleware(gate: () => Promise<void>) {
+  return createMiddleware({
+    name: "deepagent-throttle",
+    wrapModelCall: async (request, handler) => {
+      await gate();
+      return handler(request);
+    },
+  });
 }
 
 function getRequestsPerSecond(): number {
@@ -228,7 +213,6 @@ function getRequestsPerSecond(): number {
 
 function createAgentModel(): ChatOpenAI {
   const explicit = process.env.DEEPAGENT_BACKEND?.trim().toLowerCase();
-  const throttleGate = createThrottleGate(getRequestsPerSecond());
   const openaiKey = process.env.OPENAI_API_KEY?.trim();
   const groqKey = process.env.GROQ_API_KEY?.trim();
 
@@ -245,41 +229,35 @@ function createAgentModel(): ChatOpenAI {
     if (!openaiKey) {
       throw new Error("OPENAI_API_KEY is required for deepagent backend=openai");
     }
-    return new ThrottledChatOpenAI(
-      {
-        model: process.env.DEEPAGENT_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
-        apiKey: openaiKey,
-        temperature: 0,
-        // throttle를 넘는 일시적 429(TPM)는 retry-after를 존중하는 백오프 재시도로 흡수.
-        maxRetries: DEFAULT_MAX_RETRIES,
-        configuration: {
-          baseURL:
-            process.env.OPENAI_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_OPENAI_API_BASE_URL,
-        },
+    return new ChatOpenAI({
+      model: process.env.DEEPAGENT_MODEL?.trim() || DEFAULT_OPENAI_MODEL,
+      apiKey: openaiKey,
+      temperature: 0,
+      // throttle(미들웨어)를 넘는 일시적 429(TPM)는 retry-after 백오프 재시도로 흡수.
+      maxRetries: DEFAULT_MAX_RETRIES,
+      configuration: {
+        baseURL:
+          process.env.OPENAI_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_OPENAI_API_BASE_URL,
       },
-      throttleGate,
-    );
+    });
   }
 
   if (backend === "groq") {
     if (!groqKey) {
       throw new Error("GROQ_API_KEY is required for deepagent backend=groq");
     }
-    return new ThrottledChatOpenAI(
-      {
-        model:
-          process.env.DEEPAGENT_MODEL?.trim() ||
-          process.env.GROQ_ANALYSIS_MODEL?.trim() ||
-          DEFAULT_GROQ_MODEL,
-        apiKey: groqKey,
-        temperature: 0,
-        maxRetries: DEFAULT_MAX_RETRIES,
-        configuration: {
-          baseURL: process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL,
-        },
+    return new ChatOpenAI({
+      model:
+        process.env.DEEPAGENT_MODEL?.trim() ||
+        process.env.GROQ_ANALYSIS_MODEL?.trim() ||
+        DEFAULT_GROQ_MODEL,
+      apiKey: groqKey,
+      temperature: 0,
+      maxRetries: DEFAULT_MAX_RETRIES,
+      configuration: {
+        baseURL: process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL,
       },
-      throttleGate,
-    );
+    });
   }
 
   throw new Error(
@@ -337,15 +315,21 @@ function createSearchSettingsTool(input: GraphAnalysisInput) {
   );
 }
 
-/** 충돌 유형별 전문 서브에이전트 4종. 각자 search_settings 도구를 갖고 자기 유형만 검출한다. */
+/**
+ * 충돌 유형별 전문 서브에이전트 4종. 각자 search_settings 도구를 갖고 자기 유형만 검출한다.
+ * 메인 에이전트와 같은 throttle 게이트를 미들웨어로 공유해, 서브에이전트의 모델 호출까지
+ * 전부 한 게이트로 묶어 throttle한다(서브에이전트는 메인의 미들웨어를 상속하지 않으므로 명시 주입).
+ */
 function buildConflictSubAgents(
   searchSettings: ReturnType<typeof createSearchSettingsTool>,
+  throttleGate: () => Promise<void>,
 ): SubAgent[] {
   return CONFLICT_AGENTS.map((config) => ({
     name: config.name,
     description: `${config.focus} 전문 검출`,
     systemPrompt: buildConflictSubAgentPrompt(config),
     tools: [searchSettings],
+    middleware: [createThrottleMiddleware(throttleGate)],
     responseFormat: toolStrategy(analysisResponseSchema),
   }));
 }
@@ -407,13 +391,16 @@ export function createDeepAgentStoryAnalysisProvider(): StoryAnalysisProvider {
     async analyze(input: GraphAnalysisInput): Promise<GraphAnalysisResult> {
       const model = createAgentModel();
       const searchSettings = createSearchSettingsTool(input);
-      const subagents = buildConflictSubAgents(searchSettings);
+      // 하나의 게이트를 오케스트레이터·서브에이전트가 공유 → 실행 전체의 모델 호출이 throttle된다.
+      const throttleGate = createThrottleGate(getRequestsPerSecond());
+      const subagents = buildConflictSubAgents(searchSettings, throttleGate);
 
       const agent = createDeepAgent({
         model,
         tools: [searchSettings],
         subagents,
         systemPrompt: ORCHESTRATOR_PROMPT,
+        middleware: [createThrottleMiddleware(throttleGate)],
         responseFormat: toolStrategy(analysisResponseSchema),
       });
 
