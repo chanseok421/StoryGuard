@@ -316,6 +316,9 @@ function createAgentModel(): ChatOpenAI {
       temperature: 0,
       // throttle(미들웨어)를 넘는 일시적 429(TPM)는 retry-after 백오프 재시도로 흡수.
       maxRetries: DEFAULT_MAX_RETRIES,
+      // 병렬 tool call을 끈다: 서브에이전트 위임(task)이 순차로 돌아 tool_call 응답 누락(400
+      // parity)이 사라진다. 특히 mini에서 간헐적으로 나던 오류를 없앤다.
+      modelKwargs: { parallel_tool_calls: false },
       configuration: {
         baseURL:
           process.env.OPENAI_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_OPENAI_API_BASE_URL,
@@ -335,6 +338,7 @@ function createAgentModel(): ChatOpenAI {
       apiKey: groqKey,
       temperature: 0,
       maxRetries: DEFAULT_MAX_RETRIES,
+      modelKwargs: { parallel_tool_calls: false },
       configuration: {
         baseURL: process.env.GROQ_API_BASE_URL?.replace(/\/+$/, "") || DEFAULT_GROQ_API_BASE_URL,
       },
