@@ -2,6 +2,7 @@ import { createDeepAgent, type SubAgent } from "deepagents";
 import { toolStrategy, createMiddleware } from "langchain";
 import { ChatOpenAI } from "@langchain/openai";
 import { tool } from "@langchain/core/tools";
+import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
 
 import type { GraphAnalysisInput, GraphAnalysisResult } from "../../shared/types.js";
@@ -9,6 +10,7 @@ import { logger } from "../../shared/logger.js";
 import { retrieveEvidence } from "../../rag/retrieveEvidence.js";
 import { retrieveEvidenceFromVectorStore } from "../../rag/retrieveEvidenceFromVectorStore.js";
 import { validateGraphAnalysisResult } from "../validateGraphAnalysisResult.js";
+import { findUngroundedIssues } from "../groundedness.js";
 import type { StoryAnalysisProvider } from "./types.js";
 
 const DEFAULT_GROQ_API_BASE_URL = "https://api.groq.com/openai/v1";
@@ -202,6 +204,85 @@ function createThrottleMiddleware(gate: () => Promise<void>) {
     wrapModelCall: async (request, handler) => {
       await gate();
       return handler(request);
+    },
+  });
+}
+
+const SELFCORRECT_MARKER = "[self-correction]";
+
+function getMaxSelfCorrections(): number {
+  const parsed = Number.parseInt(process.env.DEEPAGENT_SELFCORRECT_MAX ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+}
+
+/**
+ * self-correction 피드백 루프 미들웨어.
+ * afterModel 훅에서 최종 구조화 출력(structuredResponse)의 groundedness를 검증하고,
+ * 원고에 없는(환각) manuscriptQuote를 가진 issue가 있으면:
+ *   1) 종료 조건(structuredResponse)을 해제하고
+ *   2) 교정 지시 메시지를 주입한 뒤
+ *   3) jumpTo:"model"로 모델 단계로 되돌려 재수행시킨다.
+ * 무한루프 방지를 위해 예산(DEEPAGENT_SELFCORRECT_MAX, 기본 1회)을 둔다.
+ * 검증 신호(findUngroundedIssues)는 LLM 없이 결정적이라 재현 가능하다.
+ */
+function createSelfCorrectionMiddleware(manuscriptText: string) {
+  const maxCorrections = getMaxSelfCorrections();
+
+  return createMiddleware({
+    name: "deepagent-self-correction",
+    // jumpTo:"model"로 되돌리려면 허용 타겟을 선언해야 한다.
+    afterModel: {
+      canJumpTo: ["model"],
+      hook: (state) => {
+      if (maxCorrections <= 0) {
+        return undefined;
+      }
+
+      const current = state as {
+        structuredResponse?: unknown;
+        messages?: Array<{ content?: unknown }>;
+      };
+      const structured = current.structuredResponse;
+      if (!structured || typeof structured !== "object") {
+        return undefined; // 아직 최종 구조화 출력이 아님 → 통과
+      }
+
+      const priorCorrections = (current.messages ?? []).filter(
+        (message) => typeof message.content === "string" && message.content.includes(SELFCORRECT_MARKER),
+      ).length;
+
+      const ungrounded = findUngroundedIssues(structured as GraphAnalysisResult, manuscriptText);
+      // 검증/데모용: FORCE=1이면 첫 회에 한해 강제로 재수행시켜 루프 동작을 확인한다.
+      const forced = process.env.DEEPAGENT_SELFCORRECT_FORCE === "1" && priorCorrections === 0;
+      if (ungrounded.length === 0 && !forced) {
+        return undefined; // 근거 OK → 그대로 종료
+      }
+      if (priorCorrections >= maxCorrections) {
+        logger.warn("self-correction budget exhausted; accepting current result", {
+          ungrounded: ungrounded.length,
+        });
+        return undefined;
+      }
+
+      logger.info("self-correction: ungrounded issues detected; looping back to model", {
+        ungrounded: ungrounded.length,
+        attempt: priorCorrections + 1,
+      });
+
+      const correctionMessage =
+        ungrounded.length > 0
+          ? `${SELFCORRECT_MARKER} 검증 실패: 아래 issue의 manuscriptQuote가 실제 원고에 존재하지 않습니다(환각).\n` +
+            ungrounded.map((issue) => `- "${issue.manuscriptQuote}" (${issue.type})`).join("\n") +
+            `\n해당 issue를 삭제하거나, 원고에 실제로 존재하는 문장으로 manuscriptQuote를 고쳐 최종 결과를 다시 내세요.`
+          : `${SELFCORRECT_MARKER} 최종 결과를 한 번 더 검토해, 각 issue의 manuscriptQuote가 원고에 실제로 존재하는지 확인하고 정확도를 높여 다시 내세요.`;
+
+      return {
+        // 종료 조건 해제 → 모델이 다시 판단하게 한다.
+        structuredResponse: undefined,
+        messages: [new HumanMessage(correctionMessage)],
+        jumpTo: "model" as const,
+      };
+      },
     },
   });
 }
@@ -400,7 +481,11 @@ export function createDeepAgentStoryAnalysisProvider(): StoryAnalysisProvider {
         tools: [searchSettings],
         subagents,
         systemPrompt: ORCHESTRATOR_PROMPT,
-        middleware: [createThrottleMiddleware(throttleGate)],
+        // throttle: 매 호출 간격 조절 / self-correction: 최종 출력 검증 실패 시 모델로 되돌려 재수행.
+        middleware: [
+          createThrottleMiddleware(throttleGate),
+          createSelfCorrectionMiddleware(input.request.manuscriptText),
+        ],
         responseFormat: toolStrategy(analysisResponseSchema),
       });
 

@@ -139,6 +139,7 @@ All providers implement the same `StoryAnalysisProvider` interface (`src/graph/p
 - delegates to four type-specific **sub-agents** via the built-in `task` tool — `world-rule-checker`, `timeline-checker`, `character-checker`, `foreshadow-checker`;
 - each agent exposes RAG search as a **tool** (`search_settings`) it calls on demand, instead of a fixed top-K passed up front;
 - merges the sub-graphs and returns structured output via `toolStrategy`, still validated by `validateGraphAnalysisResult`;
+- **self-corrects**: an `afterModel` middleware checks the final output's groundedness (does each issue's `manuscriptQuote` actually occur in the manuscript?) and, if it finds a hallucinated quote, injects a correction message and `jumpTo: "model"` to re-run — a real feedback loop, bounded by `DEEPAGENT_SELFCORRECT_MAX` (default 1);
 - falls back to the rule-based path automatically if the agent fails (same safety net as other providers).
 
 Because the deep agent is just another provider, the rest of the system is untouched — short inputs can keep the cheap deterministic path while long/complex inputs use the agent.

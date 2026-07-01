@@ -15,7 +15,7 @@
     "start:secrets:mac": "dotenv -e ~/Secrets/storyguard.env -- node dist/server.js",
     "test": "npm run test:logging && npm run test:graph && npm run test:rag && node --test src/graph/mockResultContract.test.mjs src/graph/runStoryAnalysis.test.mjs src/rag/retrieveEvidence.test.mjs",
     "test:logging": "tsx src/shared/logger.test.ts",
-    "test:graph": "tsx src/graph/validateGraphAnalysisResult.test.ts && tsx src/graph/buildStoryAnalysisPrompt.test.ts && tsx src/graph/runStoryAnalysis.provider.test.ts",
+    "test:graph": "tsx src/graph/validateGraphAnalysisResult.test.ts && tsx src/graph/buildStoryAnalysisPrompt.test.ts && tsx src/graph/runStoryAnalysis.provider.test.ts && tsx src/graph/groundedness.test.ts",
     "test:rag": "tsx src/rag/chunk-settings.test.ts && tsx src/rag/keyword-retriever.test.ts && tsx src/rag/embedding-retriever.test.ts && tsx src/rag/embeddingRetrieveEvidence.test.ts && tsx src/rag/retrieveEvidenceFromVectorStore.test.ts",
     "eval:embedding": "node --import tsx --env-file-if-exists=.env src/rag/embedding-retriever.live.ts",
     "eval:compare": "node --import tsx --env-file-if-exists=.env src/rag/compare-embeddings.live.ts",
