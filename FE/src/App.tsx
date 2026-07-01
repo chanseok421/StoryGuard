@@ -608,6 +608,9 @@ function App() {
   const [isEditingStory, setIsEditingStory] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftContent, setDraftContent] = useState("");
+  const [draftDocumentType, setDraftDocumentType] = useState<"manuscript" | "settings">(
+    "manuscript",
+  );
   const [editTitle, setEditTitle] = useState("");
   const [storyDraftErrors, setStoryDraftErrors] =
     useState<StoryDraftErrors>(emptyStoryDraftErrors);
@@ -878,6 +881,7 @@ function App() {
     setIsEditingStory(false);
     setDraftTitle("");
     setDraftContent("");
+    setDraftDocumentType("manuscript");
     setEditTitle("");
     setStoryDraftErrors(emptyStoryDraftErrors);
     setWorkspaceMode("document");
@@ -896,13 +900,14 @@ function App() {
     if (errors.title || errors.content) return;
     const story = await storyguardApi.createStory(selectedProject.id, {
       title,
-      documentType: "manuscript",
+      documentType: draftDocumentType,
       content: draftContent,
     });
     setStories((currentStories) => [story, ...currentStories]);
     setIsCreatingStory(false);
     setDraftTitle("");
     setDraftContent("");
+    setDraftDocumentType("manuscript");
     setStoryDraftErrors(emptyStoryDraftErrors);
     selectStory(story);
   }
@@ -1469,6 +1474,20 @@ function App() {
               </span>
               {isWriting ? (
                 <div className="draft-actions">
+                  {isCreatingStory ? (
+                    <label className="draft-doc-type" style={{ display: "flex", alignItems: "center", gap: 6, marginRight: "auto" }}>
+                      문서 타입
+                      <select
+                        value={draftDocumentType}
+                        onChange={(event) =>
+                          setDraftDocumentType(event.target.value as "manuscript" | "settings")
+                        }
+                      >
+                        <option value="manuscript">원고</option>
+                        <option value="settings">설정</option>
+                      </select>
+                    </label>
+                  ) : null}
                   <button
                     className="secondary-button"
                     onClick={handleCancelCreateStory}
