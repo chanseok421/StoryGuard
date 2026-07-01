@@ -9,3 +9,5 @@ coverage/
 npm-debug.log*
 .DS_Store
 .claude/
+# personal/local notes (not for the repo)
+*.local.md
